@@ -1,0 +1,12 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/EpiasPriceNotifier.Application/EpiasPriceNotifier.Application.csproj" />
+    <Project Path="src/EpiasPriceNotifier.Domain/EpiasPriceNotifier.Domain.csproj" />
+    <Project Path="src/EpiasPriceNotifier.Infrastructure/EpiasPriceNotifier.Infrastructure.csproj" />
+    <Project Path="src/EpiasPriceNotifier.Worker/EpiasPriceNotifier.Worker.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/EpiasPriceNotifier.Application.UnitTests/EpiasPriceNotifier.Application.UnitTests.csproj" />
+    <Project Path="tests/EpiasPriceNotifier.Domain.UnitTests/EpiasPriceNotifier.Domain.UnitTests.csproj" />
+  </Folder>
+</Solution>

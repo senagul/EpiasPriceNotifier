@@ -8,5 +8,6 @@
   <Folder Name="/tests/">
     <Project Path="tests/EpiasPriceNotifier.Application.UnitTests/EpiasPriceNotifier.Application.UnitTests.csproj" />
     <Project Path="tests/EpiasPriceNotifier.Domain.UnitTests/EpiasPriceNotifier.Domain.UnitTests.csproj" />
+    <Project Path="tests/EpiasPriceNotifier.IntegrationTests/EpiasPriceNotifier.IntegrationTests.csproj" />
   </Folder>
 </Solution>

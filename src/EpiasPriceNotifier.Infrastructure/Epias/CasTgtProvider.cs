@@ -1,4 +1,5 @@
-﻿using Microsoft.Extensions.Caching.Memory;
+﻿using EpiasPriceNotifier.Application.Common.Exceptions;
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
@@ -130,8 +131,8 @@ public sealed class CasTgtProvider
             _logger.LogError(
                 "EPİAŞ CAS başarısız. Status: {Status}, Body: {Body}",
                 (int)response.StatusCode, errorBody);
-            throw new Exception(
-                $"EPİAŞ TGT alınamadı. HTTP {(int)response.StatusCode}: {errorBody}");
+            throw new EpiasIntegrationException(
+                $"EPİAŞ TGT alınamadı: {errorBody}",statusCode: (int)response.StatusCode);
         }
 
         var tgt = await response.Content.ReadAsStringAsync(cancellationToken);
@@ -150,7 +151,7 @@ public sealed class CasTgtProvider
         if (string.IsNullOrWhiteSpace(tgt) || !tgt.StartsWith("TGT-"))
         {
             _logger.LogError("EPİAŞ TGT response beklenen formatta değil: '{Tgt}'", tgt);
-            throw new Exception($"TGT formatı geçersiz: '{tgt}'");
+            throw new EpiasIntegrationException($"TGT formatı geçersiz: '{tgt}'");
         }
 
         _logger.LogInformation("EPİAŞ TGT alındı (cache'leniyor, TTL: {Ttl} dk)",

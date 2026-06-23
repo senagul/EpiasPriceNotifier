@@ -2,6 +2,7 @@
 using System.Text;
 using System.Text.Json;
 using EpiasPriceNotifier.Application.Abstractions;
+using EpiasPriceNotifier.Application.Common.Exceptions;
 using EpiasPriceNotifier.Domain.Entities;
 using EpiasPriceNotifier.Domain.ValueObjects;
 using EpiasPriceNotifier.Infrastructure.Epias.Dtos;
@@ -89,8 +90,8 @@ public sealed class EpiasPriceClient : IEpiasPriceClient
             _logger.LogError(
                 "EPİAŞ MCP başarısız. Status: {Status}, Body: {Body}",
                 (int)response.StatusCode, errorBody);
-            throw new Exception(
-                $"EPİAŞ PTF alınamadı. HTTP {(int)response.StatusCode}: {errorBody}");
+            throw new EpiasIntegrationException(
+                $"EPİAŞ PTF alınamadı: {errorBody}",statusCode: (int)response.StatusCode);
         }
 
         // ReadAsStream + DeserializeAsync = string'e hiç çevirmeden direkt parse.
@@ -102,10 +103,10 @@ public sealed class EpiasPriceClient : IEpiasPriceClient
                 stream, JsonOptions, cancellationToken);
 
             if (dto is null)
-                throw new Exception("EPİAŞ MCP response deserialize edilemedi (null döndü)");
+                throw new EpiasIntegrationException("EPİAŞ MCP response deserialize edilemedi (null döndü)");
 
             if (dto.Items.Count == 0)
-                throw new Exception($"EPİAŞ MCP boş items döndü. Tarih: {date}");
+                throw new EpiasIntegrationException($"EPİAŞ MCP boş items döndü. Tarih: {date}");
 
             _logger.LogInformation(
                 "EPİAŞ PTF alındı: {Count} saat, {Date}",

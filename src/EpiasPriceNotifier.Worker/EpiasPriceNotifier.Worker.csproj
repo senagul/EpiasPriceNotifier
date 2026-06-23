@@ -27,4 +27,8 @@
     <UserSecretsId>9093e6ef-ad1b-4880-ad8f-d0428e2035d4</UserSecretsId>
   </PropertyGroup>
 
+	<ItemGroup>
+		<InternalsVisibleTo Include="EpiasPriceNotifier.IntegrationTests" />
+	</ItemGroup>
+	
 </Project>

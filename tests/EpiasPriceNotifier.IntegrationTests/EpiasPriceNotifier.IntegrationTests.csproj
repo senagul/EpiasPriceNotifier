@@ -12,6 +12,7 @@
   <ItemGroup>
     <PackageReference Include="coverlet.collector" />
     <PackageReference Include="FluentAssertions" />
+    <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
     <PackageReference Include="WireMock.Net" />
@@ -26,6 +27,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\EpiasPriceNotifier.Application\EpiasPriceNotifier.Application.csproj" />
     <ProjectReference Include="..\..\src\EpiasPriceNotifier.Infrastructure\EpiasPriceNotifier.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\src\EpiasPriceNotifier.Worker\EpiasPriceNotifier.Worker.csproj" />
   </ItemGroup>
 
 </Project>

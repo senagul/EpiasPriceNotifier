@@ -114,6 +114,7 @@ public sealed class GlobalExceptionHandler : IExceptionHandler
             ValidationException => (StatusCodes.Status400BadRequest, "Geçersiz istek"),
             UnauthorizedAccessException => (StatusCodes.Status401Unauthorized, "Yetkisiz erişim"),
             EpiasIntegrationException ex => (StatusCodes.Status502BadGateway, $"EPİAŞ entegrasyon hatası ({ex.StatusCode?.ToString() ?? "bilinmeyen"})"),
+            NotificationSendException ex => (StatusCodes.Status503ServiceUnavailable, $"Bildirim gönderilemedi ({ex.Channel})"),
             TaskCanceledException => (StatusCodes.Status408RequestTimeout, "İstek zaman aşımına uğradı"),
             ArgumentException => (StatusCodes.Status400BadRequest, "Geçersiz argüman"),
             _ => (StatusCodes.Status500InternalServerError, "Beklenmedik bir hata oluştu")

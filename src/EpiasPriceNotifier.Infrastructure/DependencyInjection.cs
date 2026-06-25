@@ -90,6 +90,14 @@ public static class DependencyInjection
         // Singleton çünkü stateless ve sender lookup'u constructor'da bir kez yapılıyor.
         services.AddSingleton<INotificationDispatcher, NotificationDispatcher>();
 
+        // Domain servisleri — stateless, Singleton güvenli
+        services.AddSingleton<EpiasPriceNotifier.Domain.Services.ICheapHourAnalyzer, EpiasPriceNotifier.Domain.Services.CheapHourAnalyzer>();
+
+        // ──────── Application'a sunulan provider'lar ────────────────────
+        // Threshold ve Recipient kaynağını arayüz arkasından sağlıyoruz.
+        // Handler bu arayüzleri inject ediyor, somut tipi bilmiyor.
+        services.AddSingleton<EpiasPriceNotifier.Application.UseCases.FetchAndNotifyCheapHours.IPriceThresholdProvider, Notifications.PriceThresholdProvider>();
+        services.AddSingleton<EpiasPriceNotifier.Application.UseCases.FetchAndNotifyCheapHours.IRecipientProvider, Notifications.RecipientProvider>();
         return services;
     }
 }

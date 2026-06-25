@@ -1,7 +1,10 @@
 ﻿using EpiasPriceNotifier.Application.Abstractions;
 using EpiasPriceNotifier.Infrastructure.Epias;
+using EpiasPriceNotifier.Infrastructure.Notifications;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
+using Telegram.Bot;
 
 namespace EpiasPriceNotifier.Infrastructure;
 
@@ -22,47 +25,70 @@ public static class DependencyInjection
         this IServiceCollection services,
         IConfiguration configuration)
     {
-        // ── 1) Configuration binding ─────────────────────────────────
-        // EpiasOptions'ı appsettings.json'daki "Epias" bölümüne bind et.
-        // .Bind() bir kez bind eder; daha güçlü yol .Configure<T>():
+        // ──────── EPİAŞ entegrasyonu ────────────────────────────────────
+
+        // EpiasOptions binding
         services
             .AddOptions<EpiasOptions>()
             .Bind(configuration.GetSection(EpiasOptions.SectionName))
-            // ValidateDataAnnotations + ValidateOnStart kombosu, eksik config'i
-            // uygulama daha çalışmaya başlamadan yakalar — fail fast.
-            // Şimdilik DataAnnotation eklemedik, ama altyapısı duruyor.
             .ValidateOnStart();
 
-        // ── 2) Memory Cache (TGT cache için lazım) ───────────────────
-        // IMemoryCache, CasTgtProvider'a inject olacak. Singleton ile gelir.
+        // Memory cache (TGT cache için lazım)
         services.AddMemoryCache();
 
-        // ── 3) CasTgtProvider için HttpClient ────────────────────────
-        // AddHttpClient<T> üç şey birden yapar:
-        //   - T'yi DI'a kaydeder (Transient default'la, ama HttpClient için sorun değil)
-        //   - HttpClient'i factory'den alıp T'nin constructor'ına inject eder
-        //   - Connection pooling, DNS refresh, dispose yönetimini factory'ye bırakır
+        // CasTgtProvider — TGT yönetimi için typed HttpClient
         services.AddHttpClient<CasTgtProvider>((sp, client) =>
         {
-            // sp.GetRequiredService<IOptions<EpiasOptions>>() ile config'i okuyup
-            // HttpClient timeout'unu config'den alıyoruz. Magic number yok.
-            var opts = sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<EpiasOptions>>().Value;
+            var opts = sp.GetRequiredService<IOptions<EpiasOptions>>().Value;
             client.Timeout = TimeSpan.FromSeconds(opts.HttpTimeoutSeconds);
         });
 
-        // ── 4) EpiasPriceClient için HttpClient ──────────────────────
-        // Aynı pattern. Bu HttpClient ayrı bir handler pool kullanır — CAS ile
-        // MCP farklı host'lar (giris.epias.com.tr vs seffaflik.epias.com.tr),
-        // ayrı HttpClient ile DNS lookup'larını da ayrı yapıyoruz.
-        //
-        // EpiasPriceClient, IEpiasPriceClient arayüzüyle DI'a giriyor —
-        // Application katmanı bu arayüz üzerinden inject ediyor, somut sınıfa
-        // bağımlı değil. Bu Dependency Inversion'ın somut uygulaması.
+        // EpiasPriceClient — IEpiasPriceClient arayüzüyle bind ediyoruz
         services.AddHttpClient<IEpiasPriceClient, EpiasPriceClient>((sp, client) =>
         {
-            var opts = sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<EpiasOptions>>().Value;
+            var opts = sp.GetRequiredService<IOptions<EpiasOptions>>().Value;
             client.Timeout = TimeSpan.FromSeconds(opts.HttpTimeoutSeconds);
         });
+
+        // ──────── Bildirim altyapısı ───────────────────────────────────
+
+        // NotificationOptions binding
+        services
+            .AddOptions<NotificationOptions>()
+            .Bind(configuration.GetSection(NotificationOptions.SectionName))
+            .ValidateOnStart();
+
+        // ★ Telegram Bot Client
+        // Bot token configuration'dan çekilip ITelegramBotClient'a sabit
+        // bağlanıyor. Singleton tutuyoruz çünkü TelegramBotClient internal
+        // olarak HttpClient pool'unu yönetiyor — yeni instance her seferinde
+        // socket açar, leak yapar. Resmi öneri: tek instance.
+        services.AddSingleton<ITelegramBotClient>(sp =>
+        {
+            var opts = sp.GetRequiredService<IOptions<NotificationOptions>>().Value;
+            return new TelegramBotClient(opts.Telegram.BotToken);
+        });
+
+        // ★ Telegram sender — ITelegramBotClient'ı kullanır
+        // INotificationSender olarak register etmek kritik: Dispatcher
+        // IEnumerable<INotificationSender> inject ediyor, hepsini buradan
+        // toplar. Discord sender eklesem, sadece bir satır daha eklerim.
+        services.AddTransient<INotificationSender, TelegramNotificationSender>();
+
+        // ★ Email sender — MailKit her gönderimde yeni SmtpClient kullanır,
+        // sender'ın kendisi stateless → Transient güvenli
+        services.AddTransient<INotificationSender, EmailNotificationSender>();
+
+        // ★ Ntfy sender — typed HttpClient pattern (IHttpClientFactory altyapısı)
+        // INotificationSender interface'iyle de ayrıca register ediyoruz çünkü
+        // AddHttpClient default'ta concrete tipi register eder, interface'i değil.
+        services.AddHttpClient<NtfyNotificationSender>();
+        services.AddTransient<INotificationSender>(sp =>
+            sp.GetRequiredService<NtfyNotificationSender>());
+
+        // ★ Dispatcher — tüm sender'ları IEnumerable olarak otomatik toplar.
+        // Singleton çünkü stateless ve sender lookup'u constructor'da bir kez yapılıyor.
+        services.AddSingleton<INotificationDispatcher, NotificationDispatcher>();
 
         return services;
     }

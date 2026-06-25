@@ -1,27 +1,25 @@
+using EpiasPriceNotifier.Application.Abstractions;
+using EpiasPriceNotifier.Domain.Enums;
+using EpiasPriceNotifier.Domain.ValueObjects;
 using EpiasPriceNotifier.Infrastructure;
+using EpiasPriceNotifier.Infrastructure.Notifications;
 using EpiasPriceNotifier.Worker.ExceptionHandlers;
+using Microsoft.Extensions.Options;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Infrastructure katmanının tüm servisleri (HttpClient'lar, EpiasOptions binding,
-// CasTgtProvider, EpiasPriceClient) tek satırla DI'a kaydedilir.
+// Infrastructure katmanının tüm servisleri (EPİAŞ + Bildirimler) tek satırla
 builder.Services.AddInfrastructure(builder.Configuration);
 
-// ★ Global Exception Handler kayıt (iki satır).
-// AddExceptionHandler<T>: T'yi DI'a kaydeder (Singleton lifetime ile gelir).
-// AddProblemDetails: ProblemDetails formatlayıcısını DI'a kaydeder.
-// İkisi birlikte UseExceptionHandler middleware'inin çalışması için gerekli.
+// Global Exception Handler
 builder.Services.AddExceptionHandler<GlobalExceptionHandler>();
 builder.Services.AddProblemDetails();
 
 var app = builder.Build();
 
-// ★ Pipeline'a ekle. Pipeline'da MUTLAKA en başa yakın olmalı —
-// aşağıdaki endpoint'lerden birinde exception fırlarsa, middleware
-// onu yakalayıp GlobalExceptionHandler'a delege eder.
 app.UseExceptionHandler();
 
-// Basit health endpoint — service ayakta mı testleri için.
+// Basit health endpoint
 app.MapGet("/health", () => Results.Ok(new
 {
     status = "healthy",
@@ -29,12 +27,9 @@ app.MapGet("/health", () => Results.Ok(new
     timestamp = DateTime.UtcNow
 }));
 
-// ★ Geçici test endpoint'leri — GlobalExceptionHandler'ı görsel olarak
-// doğrulamak için. Bu PR'da commit edip sonraki PR'larda kaldıracağız
-// (gerçek endpoint'ler MediatR ile gelince).
+// Exception handler test endpoint'leri (önceki PR'dan)
 app.MapGet("/test/error/notfound", () =>
 {
-    // Hiç try/catch yok — exception serbestçe fırlar, handler yakalar
     throw new EpiasPriceNotifier.Application.Common.Exceptions.NotFoundException(
         entityName: "DailyPriceSchedule",
         key: "2026-06-99");
@@ -59,8 +54,53 @@ app.MapGet("/test/error/epias", () =>
 
 app.MapGet("/test/error/unhandled", () =>
 {
-    // Custom exception değil — bilinmeyen tip default arm'a düşmeli (500)
     throw new InvalidOperationException("Beklenmedik bir şey oldu");
+});
+
+// ★ GEÇİCİ NOTIFICATION TEST ENDPOINT'İ
+//
+// Bu endpoint config'ten okuduğu tüm recipient'lara test mesajı yollar.
+// Tarayıcıdan veya curl ile çağırırsın:
+//   GET http://localhost:5227/test/notify
+//
+// Asıl bildirim akışı ileride Quartz job'ı + MediatR use case'i üzerinden
+// gelecek; bu sadece "altyapı çalışıyor mu" sanity check'i.
+app.MapPost("/test/notify", async (
+    INotificationDispatcher dispatcher,
+    IOptions<NotificationOptions> options,
+    CancellationToken ct) =>
+{
+    var notificationOpts = options.Value;
+
+    // Config'teki Recipients dictionary'sini Domain Recipient nesnelerine çevir
+    // Key = isim (User1/User2/User3), Value = ["Telegram", "Email"] string array
+    var recipients = notificationOpts.Recipients.Select(kvp =>
+    {
+        // String enum array'ini NotificationChannel enum array'ine map'le
+        // Enum.Parse case-insensitive: "telegram" ve "Telegram" ikisi de çalışır
+        var channels = kvp.Value
+            .Select(s => Enum.Parse<NotificationChannel>(s, ignoreCase: true))
+            .ToList();
+        return new Recipient(kvp.Key, channels);
+    }).ToList();
+
+    // Gönder
+    await dispatcher.SendAsync(
+        recipients,
+        subject: "EpiasPriceNotifier — Test Bildirim",
+        body: $"Bu bir test mesajıdır. {DateTime.Now:dd MMMM yyyy HH:mm} itibariyle altyapı çalışıyor ⚡",
+        cancellationToken: ct);
+
+    return Results.Ok(new
+    {
+        sent = true,
+        recipientCount = recipients.Count,
+        recipients = recipients.Select(r => new
+        {
+            name = r.Name,
+            channels = r.Channels.Select(c => c.ToString())
+        })
+    });
 });
 
 app.Run();

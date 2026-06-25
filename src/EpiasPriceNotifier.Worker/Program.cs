@@ -5,8 +5,14 @@ using EpiasPriceNotifier.Infrastructure;
 using EpiasPriceNotifier.Infrastructure.Notifications;
 using EpiasPriceNotifier.Worker.ExceptionHandlers;
 using Microsoft.Extensions.Options;
+using EpiasPriceNotifier.Application;
+using EpiasPriceNotifier.Application.UseCases.FetchAndNotifyCheapHours;
+using MediatR;
 
 var builder = WebApplication.CreateBuilder(args);
+
+// Application katmanı — MediatR + handler'lar
+builder.Services.AddApplication();
 
 // Infrastructure katmanının tüm servisleri (EPİAŞ + Bildirimler) tek satırla
 builder.Services.AddInfrastructure(builder.Configuration);
@@ -56,6 +62,65 @@ app.MapGet("/test/error/unhandled", () =>
 {
     throw new InvalidOperationException("Beklenmedik bir şey oldu");
 });
+
+#region test/debug-prices endpoint'leri (EPİAŞ'tan gelen ham veriyi görmek için)
+// ★ DEBUG: EPİAŞ'tan gelen ham veriyi tarayıcıdan görmek için
+// Hatalı saat gösterimini ayıklamak için. Sonra silinecek.
+//app.MapGet("/test/debug-prices/{date}", async (
+//    string date,
+//    IEpiasPriceClient client,
+//    CancellationToken ct) =>
+//{
+//    var d = DateOnly.Parse(date);
+//    var schedule = await client.GetDailyPricesAsync(d, ct);
+
+//    return Results.Ok(new
+//    {
+//        date = schedule.Date,
+//        hours = schedule.Hours.Select(h => new
+//        {
+//            // 3 farklı format — hangisi doğru görünüyor analiz edelim
+//            hourFromOffset = h.Hour.ToString("HH:mm"),
+//            hourUtc = h.Hour.UtcDateTime.ToString("HH:mm"),
+//            hourLocal = h.Hour.LocalDateTime.ToString("HH:mm"),
+//            offset = h.Hour.Offset.ToString(),
+//            priceTryPerMwh = h.PriceTryPerMwh,
+//            priceTryPerKwh = h.PriceTryPerKwh,
+//            isFree = h.IsFree
+//        })
+//    });
+//});
+
+#endregion
+
+
+// ★ GERÇEK İŞ AKIŞINI TEST EDEN ENDPOINT
+//
+// EPİAŞ'tan gerçek veri çekip ucuz saatleri bulup tüm recipient'lara
+// gerçek bildirim atar. /test/notify'dan farkı: sabit "test mesajı"
+// yerine analiz edilmiş gerçek içerik gönderiyor.
+//
+// Tarih query parameter olarak verilebilir, yoksa bugün kullanılır.
+//   POST /test/run-cheap-hours
+//   POST /test/run-cheap-hours?date=2026-06-18
+app.MapPost("/test/run-cheap-hours", async (
+    string? date,
+    IMediator mediator,
+    CancellationToken ct) =>
+{
+    var targetDate = string.IsNullOrWhiteSpace(date)
+        ? DateOnly.FromDateTime(DateTime.Today)
+        : DateOnly.Parse(date);
+
+    await mediator.Send(new FetchAndNotifyCheapHoursCommand(targetDate), ct);
+
+    return Results.Ok(new
+    {
+        triggered = true,
+        date = targetDate.ToString("yyyy-MM-dd")
+    });
+});
+
 
 // ★ GEÇİCİ NOTIFICATION TEST ENDPOINT'İ
 //

@@ -26,6 +26,8 @@ public sealed class NotificationOptions
     /// appsettings.json'dan binding çok kolay; enum'lara dispatcher'da
     /// dönüştüreceğiz. JSON'da enum string olarak yazılır, kullanıcı dostu.
     /// </summary>
+    /// 
+    public decimal ThresholdTryPerKwh { get; init; } = 0.30m;
     public Dictionary<string, string[]> Recipients { get; init; } = new();
 
     public TelegramOptions Telegram { get; init; } = new();

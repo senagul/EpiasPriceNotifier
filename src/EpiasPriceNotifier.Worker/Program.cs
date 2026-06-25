@@ -8,8 +8,58 @@ using Microsoft.Extensions.Options;
 using EpiasPriceNotifier.Application;
 using EpiasPriceNotifier.Application.UseCases.FetchAndNotifyCheapHours;
 using MediatR;
+using EpiasPriceNotifier.Worker.Jobs;
+using Quartz;
+using SchedulingOptions = EpiasPriceNotifier.Worker.Jobs.SchedulingOptions;
 
 var builder = WebApplication.CreateBuilder(args);
+
+// Quartz çok fazla log çıkarır ("Job triggered", "Scheduler going to sleep", vs.)
+// Information seviyesinde tutmak uygulama logunu kirletir; Warning yeterli.
+builder.Logging.AddFilter("Quartz", LogLevel.Warning);
+
+// ★ Quartz scheduler kaydı
+// QuartzOptions'ı config'ten bind ediyoruz; FetchAndNotifyJob'ı Quartz'a
+// kaydedip cron tetiklemesi tanımlıyoruz.
+builder.Services.Configure<SchedulingOptions>(
+    builder.Configuration.GetSection(SchedulingOptions.SectionName));
+
+builder.Services.AddQuartz(q =>
+{
+    Console.WriteLine("=== AddQuartz lambda STARTED ===");
+
+    var schedulingOpts = builder.Configuration
+        .GetSection(SchedulingOptions.SectionName)
+        .Get<SchedulingOptions>() ?? new SchedulingOptions();
+
+    Console.WriteLine($"=== Cron: '{schedulingOpts.FetchAndNotifyCron}' ===");
+    Console.WriteLine($"=== TimeZone: '{schedulingOpts.TimeZone}' ===");
+
+    var timeZone = TimeZoneInfo.FindSystemTimeZoneById(schedulingOpts.TimeZone);
+    Console.WriteLine($"=== TimeZone resolved: {timeZone.Id} ===");
+
+    var jobKey = new JobKey("FetchAndNotifyJob");
+    q.AddJob<FetchAndNotifyJob>(opts => opts.WithIdentity(jobKey));
+    Console.WriteLine($"=== Job added: {jobKey} ===");
+
+    q.AddTrigger(opts => opts
+        .ForJob(jobKey)
+        .WithIdentity("FetchAndNotifyJob-trigger")
+        .WithCronSchedule(schedulingOpts.FetchAndNotifyCron, x => x
+            .InTimeZone(timeZone)
+            .WithMisfireHandlingInstructionDoNothing()));
+    Console.WriteLine("=== Trigger added ===");
+
+    Console.WriteLine("=== AddQuartz lambda COMPLETED ===");
+});
+
+// Quartz'ı IHostedService olarak host'a tak — uygulama başlayınca
+// scheduler ayağa kalkar, kapanırken graceful shutdown.
+// WaitForJobsToComplete = true: shutdown sırasında çalışan job'ları bekle.
+builder.Services.AddQuartzHostedService(opts =>
+{
+    opts.WaitForJobsToComplete = true;
+});
 
 // Application katmanı — MediatR + handler'lar
 builder.Services.AddApplication();
@@ -121,6 +171,23 @@ app.MapPost("/test/run-cheap-hours", async (
     });
 });
 
+// ★ DEBUG: Quartz job'ını manuel tetikle (cron beklemeden test için)
+// Production'da kaldırılacak.
+app.MapPost("/test/trigger-job", async (
+    ISchedulerFactory schedulerFactory,
+    CancellationToken ct) =>
+{
+    var scheduler = await schedulerFactory.GetScheduler(ct);
+    var jobKey = new JobKey("FetchAndNotifyJob");
+
+    await scheduler.TriggerJob(jobKey, ct);
+
+    return Results.Ok(new
+    {
+        triggered = true,
+        message = "FetchAndNotifyJob manuel olarak tetiklendi"
+    });
+});
 
 // ★ GEÇİCİ NOTIFICATION TEST ENDPOINT'İ
 //

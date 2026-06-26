@@ -11,6 +11,8 @@ using MediatR;
 using EpiasPriceNotifier.Worker.Jobs;
 using Quartz;
 using SchedulingOptions = EpiasPriceNotifier.Worker.Jobs.SchedulingOptions;
+using EpiasPriceNotifier.Infrastructure.Persistence;
+using Microsoft.EntityFrameworkCore;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -72,6 +74,26 @@ builder.Services.AddExceptionHandler<GlobalExceptionHandler>();
 builder.Services.AddProblemDetails();
 
 var app = builder.Build();
+
+// ★ Database Initialization
+// Uygulama başlamadan önce DB şemasını migration'larla senkronize et.
+// İlk çalıştırmada DB dosyası yoksa yaratır + tüm tabloları kurar.
+// Sonraki çalıştırmalarda yeni migration varsa apply eder.
+//
+// Niye builder.Build() sonrasında ve UseExceptionHandler öncesinde?
+// DI container hazır (Build sonrası), middleware pipeline'a girmedik (route
+// kayıtları öncesi). DB ayağa kalkmazsa uygulamanın hiç başlamaması iyi —
+// fail-fast.
+//
+// Niye EnsureCreated değil Migrate?
+// EnsureCreated migration history'sini takip etmiyor — yarın yeni migration
+// eklersek tabloyu modify edemiyor. Migrate ise tüm migration'ları sırayla
+// uyguluyor, mevcut DB'yi schema'ya getiriyor. Production-grade yol.
+using (var scope = app.Services.CreateScope())
+{
+    var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+    await db.Database.MigrateAsync();
+}
 
 app.UseExceptionHandler();
 

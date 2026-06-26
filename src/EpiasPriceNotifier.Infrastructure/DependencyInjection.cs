@@ -5,6 +5,8 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using Telegram.Bot;
+using EpiasPriceNotifier.Infrastructure.Persistence;
+using Microsoft.EntityFrameworkCore;
 
 namespace EpiasPriceNotifier.Infrastructure;
 
@@ -89,6 +91,21 @@ public static class DependencyInjection
         // ★ Dispatcher — tüm sender'ları IEnumerable olarak otomatik toplar.
         // Singleton çünkü stateless ve sender lookup'u constructor'da bir kez yapılıyor.
         services.AddSingleton<INotificationDispatcher, NotificationDispatcher>();
+
+        // ──────── Persistence (EF Core + SQLite) ────────────────────────
+        // ConnectionString config'ten alınıyor; default value Worker'ın yanında
+        // app.db dosyası. SQLite dosya yoksa EF migration ile yaratacak.
+        var connectionString = configuration.GetConnectionString("Default")
+            ?? "Data Source=epias-price-notifier.db";
+
+        services.AddDbContext<AppDbContext>(options =>
+            options.UseSqlite(connectionString));
+
+        // Repository — Application interface'i ile bind ediyoruz.
+        // Handler INotificationLogRepository inject ediyor, somut tipi bilmiyor.
+        services.AddScoped<EpiasPriceNotifier.Application.Abstractions.INotificationLogRepository,
+                            Persistence.NotificationLogRepository>();
+
 
         // Domain servisleri — stateless, Singleton güvenli
         services.AddSingleton<EpiasPriceNotifier.Domain.Services.ICheapHourAnalyzer, EpiasPriceNotifier.Domain.Services.CheapHourAnalyzer>();

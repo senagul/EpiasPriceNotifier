@@ -25,6 +25,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\EpiasPriceNotifier.Application\EpiasPriceNotifier.Application.csproj" />
+    <ProjectReference Include="..\..\src\EpiasPriceNotifier.Infrastructure\EpiasPriceNotifier.Infrastructure.csproj" />
   </ItemGroup>
 
 </Project>

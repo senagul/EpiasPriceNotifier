@@ -42,6 +42,7 @@ public sealed class FetchAndNotifyCheapHoursHandler
     private readonly INotificationDispatcher _dispatcher;
     private readonly IPriceThresholdProvider _thresholdProvider;
     private readonly IRecipientProvider _recipientProvider;
+    private readonly INotificationLogRepository _logRepository;
     private readonly ILogger<FetchAndNotifyCheapHoursHandler> _logger;
 
     public FetchAndNotifyCheapHoursHandler(
@@ -50,6 +51,7 @@ public sealed class FetchAndNotifyCheapHoursHandler
         INotificationDispatcher dispatcher,
         IPriceThresholdProvider thresholdProvider,
         IRecipientProvider recipientProvider,
+        INotificationLogRepository logRepository,
         ILogger<FetchAndNotifyCheapHoursHandler> logger)
     {
         _priceClient = priceClient;
@@ -57,25 +59,38 @@ public sealed class FetchAndNotifyCheapHoursHandler
         _dispatcher = dispatcher;
         _thresholdProvider = thresholdProvider;
         _recipientProvider = recipientProvider;
+        _logRepository = logRepository;
         _logger = logger;
     }
 
     public async Task Handle(
-        FetchAndNotifyCheapHoursCommand command,
-        CancellationToken cancellationToken)
+          FetchAndNotifyCheapHoursCommand command,
+          CancellationToken cancellationToken)
     {
         _logger.LogInformation(
             "FetchAndNotifyCheapHours başladı: {Date}", command.Date);
 
+        // ─── Idempotency check ──────────────────────────────────────────
+        // Bu tarih için daha önce başarılı bildirim gönderilmiş mi?
+        // Quartz'ın disallow-concurrent-execution'ı bir tetiklemeyi engelliyor
+        // ama uygulama restart'ında veya manuel tetiklemede aynı tarihe ikinci
+        // bildirim atılma riski var. Repository'den sorup erken çıkıyoruz.
+        if (await _logRepository.HasSentForDateAsync(command.Date, cancellationToken))
+        {
+            _logger.LogInformation(
+                "{Date} için bildirim zaten gönderilmiş, atlanıyor (idempotency)",
+                command.Date);
+            return;
+        }
+
         // 1) EPİAŞ'tan PTF takvimini çek
-        // HTTP, TGT, JSON parse, Domain mapping — hepsi EpiasPriceClient'ın işi
         var schedule = await _priceClient.GetDailyPricesAsync(
             command.Date, cancellationToken);
 
         // 2) Threshold'u config'ten al
         var threshold = _thresholdProvider.GetThreshold();
 
-        // 3) Ucuz pencereleri bul — saf domain logic, hiç dependency yok
+        // 3) Ucuz pencereleri bul — saf domain logic
         var cheapWindows = _analyzer.FindCheapWindows(schedule, threshold);
 
         _logger.LogInformation(
@@ -91,14 +106,26 @@ public sealed class FetchAndNotifyCheapHoursHandler
             return;
         }
 
-        // 5) Mesajı formatla — pure function, side-effect yok
+        // 5) Mesajı formatla
         var (subject, body) = CheapHoursMessageFormatter.Format(
             schedule, cheapWindows, threshold);
 
         _logger.LogDebug("Bildirim mesajı hazırlandı: {Subject}", subject);
 
-        // 6) Dispatcher ile gönder — dispatcher kendi içinde fault isolation yapıyor
+        // 6) Dispatcher ile gönder
         await _dispatcher.SendAsync(recipients, subject, body, cancellationToken);
+
+        // ─── Idempotency record ─────────────────────────────────────────
+        // Başarılı gönderimden SONRA log kaydı ekle. Sıralama önemli:
+        // - Eğer önce kaydetseydik ve gönderim patlasaydı, kullanıcı mesaj
+        //   almadan idempotency etkin olurdu → kullanıcı hiçbir şey almazdı.
+        // - Şimdiki sırada: gönderim patlasa exception fırlar, log kaydı yok,
+        //   bir sonraki tetiklemede tekrar denenebilir.
+        await _logRepository.RecordSentAsync(
+            command.Date,
+            recipients.Count,
+            subject,
+            cancellationToken);
 
         _logger.LogInformation(
             "FetchAndNotifyCheapHours tamamlandı: {Date}, {RecipientCount} alıcı",

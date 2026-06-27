@@ -34,9 +34,7 @@ public sealed class NotificationDispatcher : INotificationDispatcher
 
     private readonly ILogger<NotificationDispatcher> _logger;
 
-    public NotificationDispatcher(
-        IEnumerable<INotificationSender> senders,
-        ILogger<NotificationDispatcher> logger)
+    public NotificationDispatcher(IEnumerable<INotificationSender> senders,ILogger<NotificationDispatcher> logger)
     {
         // ToDictionary key seçicisi: senderın ilan ettiği Channel.
         // Aynı Channel için iki sender register edilseydi burada exception
@@ -44,104 +42,82 @@ public sealed class NotificationDispatcher : INotificationDispatcher
         _sendersByChannel = senders.ToDictionary(s => s.Channel);
         _logger = logger;
 
-        _logger.LogInformation(
-            "NotificationDispatcher kuruldu, kayıtlı sender'lar: {Channels}",
-            string.Join(", ", _sendersByChannel.Keys));
+        _logger.LogInformation("NotificationDispatcher kuruldu, kayıtlı sender'lar: {Channels}",string.Join(", ", _sendersByChannel.Keys));
     }
 
-    public async Task SendAsync(
-        IEnumerable<Recipient> recipients,
-        string subject,
-        string body,
-        CancellationToken cancellationToken = default)
+    public async Task<DispatchResult> SendAsync(IEnumerable<Recipient> recipients,string subject,string body,CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(recipients);
 
-        // Materialize et — kaç recipient olduğunu bilmek için ve birden çok
-        // kez enumerate etmemek için (LINQ deferred execution tuzağı).
         var recipientList = recipients.ToList();
 
         if (recipientList.Count == 0)
         {
             _logger.LogWarning("Bildirim gönderilecek recipient yok");
-            return;
+            return DispatchResult.Empty;
         }
 
-        // ─── Adım 1: gönderim görevlerini topla ────────────────────────────
-        // Her (recipient × channel) çifti için bir Task.
-        // Henüz await yok — sadece "ne yapılacak" listesini hazırlıyoruz.
-        var sendTasks = new List<Task>();
+        // Her task bir bool döner: true = başarı, false = fail.
+        // Sonunda Task.WhenAll ile toplayıp DispatchResult oluşturuyoruz.
+        var sendTasks = new List<Task<bool>>();
 
         foreach (var recipient in recipientList)
         {
             foreach (var channel in recipient.Channels)
             {
-                // Bu kanal için sender DI'da kayıtlı mı?
                 if (!_sendersByChannel.TryGetValue(channel, out var sender))
                 {
-                    _logger.LogWarning(
-                        "Recipient {Recipient} {Channel} istiyor ama bu kanal için sender kayıtlı değil",
-                        recipient.Name, channel);
+                    _logger.LogWarning("Recipient {Recipient} {Channel} istiyor ama bu kanal için sender kayıtlı değil",recipient.Name, channel);
                     continue;
                 }
 
-                // Görevi listeye ekle. SafeSend wrapper'ı exception'ı yakalıyor —
-                // bir gönderim patlasa Task.WhenAll patlamasın, hepsi tamamlansın.
                 sendTasks.Add(SafeSendAsync(sender, recipient, subject, body, cancellationToken));
             }
         }
 
-        // ─── Adım 2: paralel çalıştır ──────────────────────────────────────
-        // Task.WhenAll tüm task'ları paralel başlatır, hepsi tamamlanınca döner.
-        // SafeSendAsync exception swallow ettiği için WhenAll patlamaz.
-        await Task.WhenAll(sendTasks);
+        if (sendTasks.Count == 0)
+        {
+            // Recipient var ama hiçbiri kayıtlı kanal istemedi
+            return DispatchResult.Empty;
+        }
 
-        _logger.LogInformation(
-            "Bildirim gönderimi tamamlandı: {RecipientCount} alıcı, {TaskCount} gönderim",
-            recipientList.Count, sendTasks.Count);
+        // Paralel çalıştır, her task'ın bool sonucunu topla
+        var results = await Task.WhenAll(sendTasks);
+
+        var successCount = results.Count(r => r);
+        var failureCount = results.Length - successCount;
+
+        _logger.LogInformation("Bildirim gönderimi tamamlandı: {RecipientCount} alıcı, {Success} başarılı, {Failed} başarısız",recipientList.Count, successCount, failureCount);
+
+        return new DispatchResult(successCount, failureCount);
     }
 
     /// <summary>
-    /// Tek bir sender çağrısını yutucu (swallow) bir wrapper içinde çalıştırır.
-    /// NotificationSendException ve genel Exception'ları yakalar, sadece log'lar.
-    ///
-    /// Niye böyle?
-    /// Task.WhenAll, içindeki herhangi bir Task patladığında AggregateException
-    /// fırlatır ve diğer task'ların sonuçlarına erişim zorlaşır. Bizim
-    /// felsefemiz "hepsini denemiş ol", o yüzden her task kendi içinde
-    /// güvende — patlasa bile WhenAll'a yansımıyor.
+    /// Tek bir sender çağrısını yutucu wrapper içinde çalıştırır.
+    /// Başarı durumunda true, NotificationSendException veya beklenmedik
+    /// exception durumunda false döner. OperationCanceledException re-throw
+    /// edilir (iptal bilinçli aksiyon, hata değil).
     /// </summary>
-    private async Task SafeSendAsync(
-        INotificationSender sender,
-        Recipient recipient,
-        string subject,
-        string body,
-        CancellationToken cancellationToken)
+    private async Task<bool> SafeSendAsync(INotificationSender sender,Recipient recipient,string subject,string body,CancellationToken cancellationToken)
     {
         try
         {
             await sender.SendAsync(recipient, subject, body, cancellationToken);
+            return true;
         }
         catch (NotificationSendException ex)
         {
-            // Domain exception — beklenen başarısızlık (ör. config eksik, API down)
-            _logger.LogError(ex,
-                "Bildirim gönderim hatası: {Channel} → {Recipient}",
-                ex.Channel, ex.RecipientName);
+            _logger.LogError(ex,"Bildirim gönderim hatası: {Channel} → {Recipient}",ex.Channel, ex.RecipientName);
+            return false;
         }
         catch (OperationCanceledException)
         {
-            // CancellationToken iptali — sessizce çık, log bile gereksiz
-            // (CT iptali bilinçli bir aksiyon, hata değil)
             throw;
         }
         catch (Exception ex)
         {
-            // Beklenmedik exception — sender'lar zaten içeride NotificationSendException
-            // wrap ediyor ama buraya bir şey gelirse defensive log
-            _logger.LogError(ex,
-                "Beklenmedik bildirim hatası: {Channel} → {Recipient}",
-                sender.Channel, recipient.Name);
+            _logger.LogError(ex, "Beklenmedik bildirim hatası: {Channel} → {Recipient}", sender.Channel, recipient.Name);
+            return false;
         }
     }
 }

@@ -58,6 +58,9 @@ public class FetchAndNotifyCheapHoursHandlerTests
             new Recipient("User1", new[] { NotificationChannel.Telegram })
         });
 
+        // Dispatcher default: 1 başarı, 0 fail (happy path). Testler override edebilir.
+        _dispatcher.SendAsync(Arg.Any<IEnumerable<Recipient>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(new DispatchResult(SuccessCount: 1, FailureCount: 0));
+
         _sut = new FetchAndNotifyCheapHoursHandler(
             _priceClient,
             _analyzer,
@@ -341,5 +344,45 @@ public class FetchAndNotifyCheapHoursHandlerTests
                 priceEurPerMwh: 0m));
         }
         return new DailyPriceSchedule(date, hours);
+    }
+
+    [Fact]
+    public async Task Handle_WhenAllChannelsFail_DoesNotRecordSent()
+    {
+        // PR'ın asıl davranışı: dispatcher hiç başarı yoksa handler kayıt atmıyor.
+        // Bu sayede bir sonraki tetikleme tekrar deneme şansı buluyor.
+        _logRepository.HasSentForDateAsync(TestDate, Arg.Any<CancellationToken>()).Returns(false);
+
+        var schedule = BuildSchedule(0m);
+        _priceClient.GetDailyPricesAsync(TestDate, Arg.Any<CancellationToken>()).Returns(schedule);
+
+        _analyzer.FindCheapWindows(schedule, Threshold).Returns(Array.Empty<CheapWindow>());
+
+        // Dispatcher: 0 başarı, 3 fail — hepsi patladı
+        _dispatcher.SendAsync(Arg.Any<IEnumerable<Recipient>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(new DispatchResult(SuccessCount: 0, FailureCount: 3));
+
+        await _sut.Handle(new FetchAndNotifyCheapHoursCommand(TestDate), CancellationToken.None);
+
+        // RecordSent ÇAĞRILMADI — bir sonraki tetiklemede tekrar denenecek
+        await _logRepository.DidNotReceive().RecordSentAsync(Arg.Any<DateOnly>(), Arg.Any<int>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task Handle_WhenAtLeastOneChannelSucceeds_RecordsSent()
+    {
+        // Partial başarı (1 success + 2 fail) bile RecordSent için yeterli.
+        // Kullanıcılardan biri bile mesajı aldıysa idempotency etkin olur.
+        _logRepository.HasSentForDateAsync(TestDate, Arg.Any<CancellationToken>()).Returns(false);
+
+        var schedule = BuildSchedule(0m);
+        _priceClient.GetDailyPricesAsync(TestDate, Arg.Any<CancellationToken>()).Returns(schedule);
+
+        _analyzer.FindCheapWindows(schedule, Threshold).Returns(Array.Empty<CheapWindow>());
+
+        _dispatcher.SendAsync(Arg.Any<IEnumerable<Recipient>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(new DispatchResult(SuccessCount: 1, FailureCount: 2));
+
+        await _sut.Handle(new FetchAndNotifyCheapHoursCommand(TestDate), CancellationToken.None);
+
+        await _logRepository.Received(1).RecordSentAsync(TestDate, Arg.Any<int>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
     }
 }

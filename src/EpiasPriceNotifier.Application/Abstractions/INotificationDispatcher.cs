@@ -11,11 +11,10 @@ namespace EpiasPriceNotifier.Application.Abstractions;
 /// 2) Paralel olarak gönderimleri tetikle (hızlı olsun)
 /// 3) Bir gönderim patlasa (NotificationSendException) yutup loglar,
 ///    diğer gönderimlere devam eder — fault isolation
+/// 4) Sonunda DispatchResult döner — handler post-dispatch kararını verir
 ///
-/// Use case'ler (ileride MediatR handler'ları) bu interface'i inject edecek
-/// ve `await dispatcher.SendAsync(recipients, subject, body)` diyecek.
-/// Hangi kanaldan kime gittiği, exception yakalama, paralelizasyon — hepsi
-/// dispatcher'ın içinde, use case temiz kalır.
+/// Use case'ler (MediatR handler'ları) bu interface'i inject edip
+/// `var result = await dispatcher.SendAsync(...)` der.
 /// </summary>
 public interface INotificationDispatcher
 {
@@ -23,16 +22,12 @@ public interface INotificationDispatcher
     /// Verilen recipient'lara, her birinin seçtiği kanallar üzerinden
     /// aynı subject + body ile mesaj gönderir.
     /// </summary>
-    /// <param name="recipients">Mesajın gideceği kişiler.</param>
-    /// <param name="subject">Tüm kanallar için kısa başlık.</param>
-    /// <param name="body">Tüm kanallar için mesaj gövdesi.</param>
-    /// <param name="cancellationToken">İptal token'ı.</param>
-    /// <remarks>
-    /// Bu method exception fırlatmaz — bireysel kanal patlamaları içeride
-    /// loglanır. Toplu bir hata söz konusu olduğunda da return tipinde
-    /// sinyal veririz (gelecek genişletme).
-    /// </remarks>
-    Task SendAsync(
+    /// <returns>
+    /// Başarılı ve başarısız gönderim sayılarını içeren DispatchResult.
+    /// Caller bu sonuca bakarak post-dispatch kararını verebilir
+    /// (örn. idempotency kaydı atıp atmamak).
+    /// </returns>
+    Task<DispatchResult> SendAsync(
         IEnumerable<Recipient> recipients,
         string subject,
         string body,

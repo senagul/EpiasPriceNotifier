@@ -34,8 +34,7 @@ namespace EpiasPriceNotifier.Application.UseCases.FetchAndNotifyCheapHours;
 /// (4 unit test'i var). Bu, "test for behavior, not for implementation"
 /// prensibinin bir uygulaması.
 /// </summary>
-public sealed class FetchAndNotifyCheapHoursHandler
-    : IRequestHandler<FetchAndNotifyCheapHoursCommand>
+public sealed class FetchAndNotifyCheapHoursHandler: IRequestHandler<FetchAndNotifyCheapHoursCommand>
 {
     private readonly IEpiasPriceClient _priceClient;
     private readonly ICheapHourAnalyzer _analyzer;
@@ -45,14 +44,7 @@ public sealed class FetchAndNotifyCheapHoursHandler
     private readonly INotificationLogRepository _logRepository;
     private readonly ILogger<FetchAndNotifyCheapHoursHandler> _logger;
 
-    public FetchAndNotifyCheapHoursHandler(
-        IEpiasPriceClient priceClient,
-        ICheapHourAnalyzer analyzer,
-        INotificationDispatcher dispatcher,
-        IPriceThresholdProvider thresholdProvider,
-        IRecipientProvider recipientProvider,
-        INotificationLogRepository logRepository,
-        ILogger<FetchAndNotifyCheapHoursHandler> logger)
+    public FetchAndNotifyCheapHoursHandler(IEpiasPriceClient priceClient,ICheapHourAnalyzer analyzer,INotificationDispatcher dispatcher,IPriceThresholdProvider thresholdProvider,IRecipientProvider recipientProvider,INotificationLogRepository logRepository,ILogger<FetchAndNotifyCheapHoursHandler> logger)
     {
         _priceClient = priceClient;
         _analyzer = analyzer;
@@ -63,12 +55,9 @@ public sealed class FetchAndNotifyCheapHoursHandler
         _logger = logger;
     }
 
-    public async Task Handle(
-          FetchAndNotifyCheapHoursCommand command,
-          CancellationToken cancellationToken)
+    public async Task Handle(FetchAndNotifyCheapHoursCommand command,CancellationToken cancellationToken)
     {
-        _logger.LogInformation(
-            "FetchAndNotifyCheapHours başladı: {Date}", command.Date);
+        _logger.LogInformation("FetchAndNotifyCheapHours başladı: {Date}", command.Date);
 
         // ─── Idempotency check ──────────────────────────────────────────
         // Bu tarih için daha önce başarılı bildirim gönderilmiş mi?
@@ -77,15 +66,12 @@ public sealed class FetchAndNotifyCheapHoursHandler
         // bildirim atılma riski var. Repository'den sorup erken çıkıyoruz.
         if (await _logRepository.HasSentForDateAsync(command.Date, cancellationToken))
         {
-            _logger.LogInformation(
-                "{Date} için bildirim zaten gönderilmiş, atlanıyor (idempotency)",
-                command.Date);
+            _logger.LogInformation("{Date} için bildirim zaten gönderilmiş, atlanıyor (idempotency)",command.Date);
             return;
         }
 
         // 1) EPİAŞ'tan PTF takvimini çek
-        var schedule = await _priceClient.GetDailyPricesAsync(
-            command.Date, cancellationToken);
+        var schedule = await _priceClient.GetDailyPricesAsync(command.Date, cancellationToken);
 
         // 2) Threshold'u config'ten al
         var threshold = _thresholdProvider.GetThreshold();
@@ -93,43 +79,41 @@ public sealed class FetchAndNotifyCheapHoursHandler
         // 3) Ucuz pencereleri bul — saf domain logic
         var cheapWindows = _analyzer.FindCheapWindows(schedule, threshold);
 
-        _logger.LogInformation(
-            "Analiz tamamlandı: {WindowCount} ucuz pencere bulundu (eşik: {Threshold} TL/kWh)",
-            cheapWindows.Count, threshold.AmountTryPerKwh);
+        _logger.LogInformation("Analiz tamamlandı: {WindowCount} ucuz pencere bulundu (eşik: {Threshold} TL/kWh)",cheapWindows.Count, threshold.AmountTryPerKwh);
 
         // 4) Recipient listesini hazırla
         var recipients = _recipientProvider.GetRecipients().ToList();
         if (recipients.Count == 0)
         {
-            _logger.LogWarning(
-                "Bildirim gönderilecek recipient tanımlı değil, akış sessizce sonlanıyor");
+            _logger.LogWarning("Bildirim gönderilecek recipient tanımlı değil, akış sessizce sonlanıyor");
             return;
         }
 
         // 5) Mesajı formatla
-        var (subject, body) = CheapHoursMessageFormatter.Format(
-            schedule, cheapWindows, threshold);
+        var (subject, body) = CheapHoursMessageFormatter.Format(schedule, cheapWindows, threshold);
 
         _logger.LogDebug("Bildirim mesajı hazırlandı: {Subject}", subject);
 
-        // 6) Dispatcher ile gönder
-        await _dispatcher.SendAsync(recipients, subject, body, cancellationToken);
+        // 6) Dispatcher ile gönder — sonuç DispatchResult döner
+        var dispatchResult = await _dispatcher.SendAsync(recipients, subject, body, cancellationToken);
 
         // ─── Idempotency record ─────────────────────────────────────────
-        // Başarılı gönderimden SONRA log kaydı ekle. Sıralama önemli:
-        // - Eğer önce kaydetseydik ve gönderim patlasaydı, kullanıcı mesaj
-        //   almadan idempotency etkin olurdu → kullanıcı hiçbir şey almazdı.
-        // - Şimdiki sırada: gönderim patlasa exception fırlar, log kaydı yok,
-        //   bir sonraki tetiklemede tekrar denenebilir.
-        await _logRepository.RecordSentAsync(
-            command.Date,
-            recipients.Count,
-            subject,
-            cancellationToken);
+        // Sadece en az bir başarılı gönderim varsa kayıt at.
+        // Eğer tüm kanallar patladıysa (HasAnySuccess == false):
+        //   - DB'ye "gönderildi" yazmıyoruz
+        //   - Bir sonraki tetiklemede (cron veya manuel) tekrar denenecek
+        //   - Kullanıcı sessizce mesajsız kalmıyor
+        if (dispatchResult.HasAnySuccess)
+        {
+            await _logRepository.RecordSentAsync(command.Date,recipients.Count,subject,cancellationToken);
 
-        _logger.LogInformation(
-            "FetchAndNotifyCheapHours tamamlandı: {Date}, {RecipientCount} alıcı",
-            command.Date, recipients.Count);
+            _logger.LogInformation("FetchAndNotifyCheapHours tamamlandı: {Date}, {Success}/{Total} başarılı",command.Date, dispatchResult.SuccessCount, dispatchResult.TotalAttempts);
+        }
+        else
+        {
+            // Hiç başarı yok — bir sonraki tetiklemede tekrar denenecek
+            _logger.LogWarning("FetchAndNotifyCheapHours: tüm kanallar başarısız ({Total} deneme), kayıt atlanıyor",dispatchResult.TotalAttempts);
+        }
     }
 }
 

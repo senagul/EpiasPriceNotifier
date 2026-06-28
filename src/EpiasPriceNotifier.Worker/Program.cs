@@ -1,18 +1,30 @@
+using EpiasPriceNotifier.Application;
 using EpiasPriceNotifier.Application.Abstractions;
+using EpiasPriceNotifier.Application.UseCases.FetchAndNotifyCheapHours;
 using EpiasPriceNotifier.Domain.Enums;
 using EpiasPriceNotifier.Domain.ValueObjects;
 using EpiasPriceNotifier.Infrastructure;
 using EpiasPriceNotifier.Infrastructure.Notifications;
-using EpiasPriceNotifier.Worker.ExceptionHandlers;
-using Microsoft.Extensions.Options;
-using EpiasPriceNotifier.Application;
-using EpiasPriceNotifier.Application.UseCases.FetchAndNotifyCheapHours;
-using MediatR;
-using EpiasPriceNotifier.Worker.Jobs;
-using Quartz;
-using SchedulingOptions = EpiasPriceNotifier.Worker.Jobs.SchedulingOptions;
 using EpiasPriceNotifier.Infrastructure.Persistence;
+using EpiasPriceNotifier.Worker.ExceptionHandlers;
+using EpiasPriceNotifier.Worker.Jobs;
+using MediatR;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
+using OpenTelemetry.Metrics;
+using OpenTelemetry.Resources;
+using OpenTelemetry.Trace;
+using Quartz;
+using Serilog;
+using SchedulingOptions = EpiasPriceNotifier.Worker.Jobs.SchedulingOptions;
+using OpenTelemetry.Resources;
+using OpenTelemetry.Trace;
+using OpenTelemetry.Metrics;
+using OpenTelemetry.Exporter;
+
+// Bootstrap logger — Serilog DI'a girmeden önceki erken hataları yakalar.
+// Container ayağa kalkamasa bile bu seviyede log üretebilir.
+Log.Logger = new LoggerConfiguration().WriteTo.Console().CreateBootstrapLogger();
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -28,21 +40,15 @@ builder.Services.Configure<SchedulingOptions>(
 
 builder.Services.AddQuartz(q =>
 {
-    Console.WriteLine("=== AddQuartz lambda STARTED ===");
-
     var schedulingOpts = builder.Configuration
         .GetSection(SchedulingOptions.SectionName)
         .Get<SchedulingOptions>() ?? new SchedulingOptions();
 
-    Console.WriteLine($"=== Cron: '{schedulingOpts.FetchAndNotifyCron}' ===");
-    Console.WriteLine($"=== TimeZone: '{schedulingOpts.TimeZone}' ===");
 
     var timeZone = TimeZoneInfo.FindSystemTimeZoneById(schedulingOpts.TimeZone);
-    Console.WriteLine($"=== TimeZone resolved: {timeZone.Id} ===");
 
     var jobKey = new JobKey("FetchAndNotifyJob");
     q.AddJob<FetchAndNotifyJob>(opts => opts.WithIdentity(jobKey));
-    Console.WriteLine($"=== Job added: {jobKey} ===");
 
     q.AddTrigger(opts => opts
         .ForJob(jobKey)
@@ -50,9 +56,7 @@ builder.Services.AddQuartz(q =>
         .WithCronSchedule(schedulingOpts.FetchAndNotifyCron, x => x
             .InTimeZone(timeZone)
             .WithMisfireHandlingInstructionDoNothing()));
-    Console.WriteLine("=== Trigger added ===");
 
-    Console.WriteLine("=== AddQuartz lambda COMPLETED ===");
 });
 
 // Quartz'ı IHostedService olarak host'a tak — uygulama başlayınca
@@ -72,6 +76,51 @@ builder.Services.AddInfrastructure(builder.Configuration);
 // Global Exception Handler
 builder.Services.AddExceptionHandler<GlobalExceptionHandler>();
 builder.Services.AddProblemDetails();
+
+// Serilog: structured logging + OpenTelemetry sink.
+// Configuration'dan okuyor — appsettings.json'a Serilog bölümü ekleyeceğiz.
+// Default minimum level Information; Microsoft.AspNetCore Warning'e çekildi.
+builder.Host.UseSerilog((context, services, config) => config
+    .ReadFrom.Configuration(context.Configuration)
+    .ReadFrom.Services(services)
+    .Enrich.FromLogContext()
+    .Enrich.WithProperty("Application", "EpiasPriceNotifier")
+    .WriteTo.Console()
+    .WriteTo.OpenTelemetry(opts =>
+    {
+        opts.Endpoint = context.Configuration["OpenTelemetry:Endpoint"] ?? "http://localhost:4317";
+        opts.Protocol = Serilog.Sinks.OpenTelemetry.OtlpProtocol.Grpc;
+        opts.ResourceAttributes = new Dictionary<string, object> { ["service.name"] = "EpiasPriceNotifier", ["service.version"] = "1.0.0", ["deployment.environment"] = context.HostingEnvironment.EnvironmentName };
+    }));
+
+
+// ─── OpenTelemetry: Tracing + Metrics ──────────────────────────────────────
+// Logs zaten Serilog -> OpenTelemetry sink üzerinden gidiyor.
+// Burada distributed tracing ve metrics export ediyoruz aynı endpoint'e.
+//
+// service.name = "EpiasPriceNotifier" (SigNoz UI'da Services sekmesinde böyle görünecek).
+// AspNetCore + HttpClient + EF Core otomatik instrumentation:
+//   - HTTP request'leri otomatik trace
+//   - Outbound HttpClient çağrıları (EPİAŞ, Telegram, ntfy) otomatik trace
+//   - EF Core sorguları otomatik trace
+// Hiç manuel kod yazmamıza gerek yok — sadece "AddXxxInstrumentation()" çağırıyoruz.
+var otelEndpoint = builder.Configuration["OpenTelemetry:Endpoint"] ?? "http://localhost:4317";
+var serviceName = builder.Configuration["OpenTelemetry:ServiceName"] ?? "EpiasPriceNotifier";
+var serviceVersion = builder.Configuration["OpenTelemetry:ServiceVersion"] ?? "1.0.0";
+
+builder.Services.AddOpenTelemetry()
+    .ConfigureResource(resource => resource.AddService(serviceName: serviceName, serviceVersion: serviceVersion).AddAttributes(new[] { new KeyValuePair<string, object>("deployment.environment", builder.Environment.EnvironmentName) }))
+    .WithTracing(tracing => tracing
+        .AddAspNetCoreInstrumentation()
+        .AddHttpClientInstrumentation()
+        .AddSource("EpiasPriceNotifier.*")
+        .AddOtlpExporter(opts => { opts.Endpoint = new Uri(otelEndpoint); opts.Protocol = OtlpExportProtocol.Grpc; }))
+    .WithMetrics(metrics => metrics
+        .AddAspNetCoreInstrumentation()
+        .AddHttpClientInstrumentation()
+        .AddRuntimeInstrumentation()
+        .AddMeter("EpiasPriceNotifier.*")
+        .AddOtlpExporter(opts => { opts.Endpoint = new Uri(otelEndpoint); opts.Protocol = OtlpExportProtocol.Grpc; }));
 
 var app = builder.Build();
 

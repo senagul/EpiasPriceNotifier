@@ -1,8 +1,9 @@
-ï»¿using EpiasPriceNotifier.Application.Abstractions;
+using EpiasPriceNotifier.Application.Abstractions;
 using EpiasPriceNotifier.Application.Common.Exceptions;
 using EpiasPriceNotifier.Domain.Enums;
 using EpiasPriceNotifier.Domain.ValueObjects;
 using EpiasPriceNotifier.Infrastructure.Notifications;
+using EpiasPriceNotifier.Infrastructure.Observability;
 using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
@@ -21,7 +22,7 @@ public class NotificationDispatcherTests
         var emailSender = Substitute.For<INotificationSender>();
         emailSender.Channel.Returns(NotificationChannel.Email);
 
-        var dispatcher = new NotificationDispatcher(new[] { telegramSender, emailSender }, NullLogger<NotificationDispatcher>.Instance);
+        var dispatcher = CreateDispatcher(telegramSender, emailSender);
 
         var recipient = new Recipient("User1", new[] { NotificationChannel.Telegram });
 
@@ -44,7 +45,7 @@ public class NotificationDispatcherTests
         var emailSender = Substitute.For<INotificationSender>();
         emailSender.Channel.Returns(NotificationChannel.Email);
 
-        var dispatcher = new NotificationDispatcher(new[] { telegramSender, emailSender }, NullLogger<NotificationDispatcher>.Instance);
+        var dispatcher = CreateDispatcher(telegramSender, emailSender);
 
         var user1 = new Recipient("User1", new[] { NotificationChannel.Telegram, NotificationChannel.Email });
         var user2 = new Recipient("User2", new[] { NotificationChannel.Email });
@@ -70,15 +71,15 @@ public class NotificationDispatcherTests
         var emailSender = Substitute.For<INotificationSender>();
         emailSender.Channel.Returns(NotificationChannel.Email);
 
-        var dispatcher = new NotificationDispatcher(new[] { telegramSender, emailSender }, NullLogger<NotificationDispatcher>.Instance);
+        var dispatcher = CreateDispatcher(telegramSender, emailSender);
 
         var recipient = new Recipient("User1", new[] { NotificationChannel.Telegram, NotificationChannel.Email });
 
         var act = async () => await dispatcher.SendAsync(new[] { recipient }, "s", "b");
 
         var result = await act.Should().NotThrowAsync();
-        result.Subject.SuccessCount.Should().Be(1); // Email baÅŸarÄ±lÄ±
-        result.Subject.FailureCount.Should().Be(1); // Telegram patladÄ±
+        result.Subject.SuccessCount.Should().Be(1); // Email baþarýlý
+        result.Subject.FailureCount.Should().Be(1); // Telegram patladý
         result.Subject.HasAnySuccess.Should().BeTrue();
 
         await telegramSender.Received(1).SendAsync(Arg.Any<Recipient>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
@@ -88,8 +89,8 @@ public class NotificationDispatcherTests
     [Fact]
     public async Task SendAsync_WhenAllSendersThrow_ReturnsAllFailures()
     {
-        // Yeni test: tÃ¼m kanallar patladÄ±ysa SuccessCount = 0, HasAnySuccess = false.
-        // Bu davranÄ±ÅŸ handler'Ä±n "kayÄ±t atma" mantÄ±ÄŸÄ±nÄ±n temeli.
+        // Yeni test: tüm kanallar patladýysa SuccessCount = 0, HasAnySuccess = false.
+        // Bu davranýþ handler'ýn "kayýt atma" mantýðýnýn temeli.
         var telegramSender = Substitute.For<INotificationSender>();
         telegramSender.Channel.Returns(NotificationChannel.Telegram);
         telegramSender.SendAsync(Arg.Any<Recipient>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>()).ThrowsAsync(new NotificationSendException(NotificationChannel.Telegram, "User1", "Telegram down"));
@@ -98,7 +99,7 @@ public class NotificationDispatcherTests
         emailSender.Channel.Returns(NotificationChannel.Email);
         emailSender.SendAsync(Arg.Any<Recipient>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>()).ThrowsAsync(new NotificationSendException(NotificationChannel.Email, "User1", "Email down"));
 
-        var dispatcher = new NotificationDispatcher(new[] { telegramSender, emailSender }, NullLogger<NotificationDispatcher>.Instance);
+        var dispatcher = CreateDispatcher(telegramSender, emailSender);
 
         var recipient = new Recipient("User1", new[] { NotificationChannel.Telegram, NotificationChannel.Email });
 
@@ -116,14 +117,14 @@ public class NotificationDispatcherTests
         var telegramSender = Substitute.For<INotificationSender>();
         telegramSender.Channel.Returns(NotificationChannel.Telegram);
 
-        var dispatcher = new NotificationDispatcher(new[] { telegramSender }, NullLogger<NotificationDispatcher>.Instance);
+        var dispatcher = CreateDispatcher(telegramSender);
 
         var recipient = new Recipient("User1", new[] { NotificationChannel.Telegram, NotificationChannel.Email });
 
         var result = await dispatcher.SendAsync(new[] { recipient }, "s", "b");
 
-        result.SuccessCount.Should().Be(1); // Telegram baÅŸarÄ±lÄ±
-        result.FailureCount.Should().Be(0); // Email kanal yok, skip, hata sayÄ±lmÄ±yor
+        result.SuccessCount.Should().Be(1); // Telegram baþarýlý
+        result.FailureCount.Should().Be(0); // Email kanal yok, skip, hata sayýlmýyor
 
         await telegramSender.Received(1).SendAsync(Arg.Any<Recipient>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
     }
@@ -134,7 +135,7 @@ public class NotificationDispatcherTests
         var sender = Substitute.For<INotificationSender>();
         sender.Channel.Returns(NotificationChannel.Telegram);
 
-        var dispatcher = new NotificationDispatcher(new[] { sender }, NullLogger<NotificationDispatcher>.Instance);
+        var dispatcher = CreateDispatcher(sender);
 
         var result = await dispatcher.SendAsync(Array.Empty<Recipient>(), "s", "b");
 
@@ -152,7 +153,7 @@ public class NotificationDispatcherTests
         var sender = Substitute.For<INotificationSender>();
         sender.Channel.Returns(NotificationChannel.Telegram);
 
-        var dispatcher = new NotificationDispatcher(new[] { sender }, NullLogger<NotificationDispatcher>.Instance);
+        var dispatcher = CreateDispatcher(sender);
 
         var act = async () => await dispatcher.SendAsync(null!, "s", "b");
 
@@ -166,13 +167,13 @@ public class NotificationDispatcherTests
         sender.Channel.Returns(NotificationChannel.Telegram);
         sender.SendAsync(Arg.Any<Recipient>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>()).ThrowsAsync(new InvalidOperationException("unexpected"));
 
-        var dispatcher = new NotificationDispatcher(new[] { sender }, NullLogger<NotificationDispatcher>.Instance);
+        var dispatcher = CreateDispatcher(sender);
 
         var recipient = new Recipient("User1", new[] { NotificationChannel.Telegram });
 
         var result = await dispatcher.SendAsync(new[] { recipient }, "s", "b");
 
-        // Beklenmedik exception da yutuldu, failure sayÄ±ldÄ±, exception fÄ±rlatÄ±lmadÄ±
+        // Beklenmedik exception da yutuldu, failure sayýldý, exception fýrlatýlmadý
         result.SuccessCount.Should().Be(0);
         result.FailureCount.Should().Be(1);
         result.HasAnySuccess.Should().BeFalse();
@@ -187,8 +188,15 @@ public class NotificationDispatcherTests
         var sender2 = Substitute.For<INotificationSender>();
         sender2.Channel.Returns(NotificationChannel.Telegram);
 
-        var act = () => new NotificationDispatcher(new[] { sender1, sender2 }, NullLogger<NotificationDispatcher>.Instance);
+        var act = () => CreateDispatcher(sender1, sender2);
 
         act.Should().Throw<ArgumentException>();
     }
+
+    /// <summary>
+    /// Test helper — NotificationDispatcher'ý gerçek bir EpiasMetrics instance'ý
+    /// ile yaratýr. Metric'lerin observable tarafýný test etmiyoruz (kapsam dýþý),
+    /// sadece dispatcher davranýþý için gerçek bir non-null Meter yeterli.
+    /// </summary>
+    private static NotificationDispatcher CreateDispatcher(params INotificationSender[] senders) => new(senders, NullLogger<NotificationDispatcher>.Instance, new EpiasMetrics());
 }

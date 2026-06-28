@@ -2,6 +2,7 @@
 using EpiasPriceNotifier.Application.Common.Exceptions;
 using EpiasPriceNotifier.Domain.Enums;
 using EpiasPriceNotifier.Domain.ValueObjects;
+using EpiasPriceNotifier.Infrastructure.Observability;
 using Microsoft.Extensions.Logging;
 
 namespace EpiasPriceNotifier.Infrastructure.Notifications;
@@ -31,21 +32,21 @@ public sealed class NotificationDispatcher : INotificationDispatcher
     /// O(1) erişim, runtime'da hızlı.
     /// </summary>
     private readonly IReadOnlyDictionary<NotificationChannel, INotificationSender> _sendersByChannel;
-
     private readonly ILogger<NotificationDispatcher> _logger;
+    private readonly EpiasMetrics _metrics;
 
-    public NotificationDispatcher(IEnumerable<INotificationSender> senders,ILogger<NotificationDispatcher> logger)
+    public NotificationDispatcher(IEnumerable<INotificationSender> senders,ILogger<NotificationDispatcher> logger, EpiasMetrics metrics)
     {
-        // ToDictionary key seçicisi: senderın ilan ettiği Channel.
-        // Aynı Channel için iki sender register edilseydi burada exception
-        // fırlatırdı — bu kasıtlı; configuration hatasını erken yakalamak iyi.
-        _sendersByChannel = senders.ToDictionary(s => s.Channel);
+        ArgumentNullException.ThrowIfNull(senders);
+        var sendersList = senders.ToList();
+        _sendersByChannel = sendersList.ToDictionary(s => s.Channel);
         _logger = logger;
+        _metrics = metrics;
 
         _logger.LogInformation("NotificationDispatcher kuruldu, kayıtlı sender'lar: {Channels}",string.Join(", ", _sendersByChannel.Keys));
     }
 
-    public async Task<DispatchResult> SendAsync(IEnumerable<Recipient> recipients,string subject,string body,CancellationToken cancellationToken = default)
+    public async Task<DispatchResult> SendAsync(IEnumerable<Recipient> recipients, string subject, string body, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(recipients);
 
@@ -57,37 +58,36 @@ public sealed class NotificationDispatcher : INotificationDispatcher
             return DispatchResult.Empty;
         }
 
-        // Her task bir bool döner: true = başarı, false = fail.
-        // Sonunda Task.WhenAll ile toplayıp DispatchResult oluşturuyoruz.
-        var sendTasks = new List<Task<bool>>();
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
 
+        var sendTasks = new List<Task<bool>>();
         foreach (var recipient in recipientList)
         {
             foreach (var channel in recipient.Channels)
             {
                 if (!_sendersByChannel.TryGetValue(channel, out var sender))
                 {
-                    _logger.LogWarning("Recipient {Recipient} {Channel} istiyor ama bu kanal için sender kayıtlı değil",recipient.Name, channel);
+                    _logger.LogWarning("Recipient {Recipient} {Channel} istiyor ama bu kanal için sender kayıtlı değil", recipient.Name, channel);
                     continue;
                 }
-
                 sendTasks.Add(SafeSendAsync(sender, recipient, subject, body, cancellationToken));
             }
         }
 
         if (sendTasks.Count == 0)
         {
-            // Recipient var ama hiçbiri kayıtlı kanal istemedi
             return DispatchResult.Empty;
         }
 
-        // Paralel çalıştır, her task'ın bool sonucunu topla
         var results = await Task.WhenAll(sendTasks);
+
+        stopwatch.Stop();
+        _metrics.RecordDispatchDuration(stopwatch.Elapsed.TotalSeconds);
 
         var successCount = results.Count(r => r);
         var failureCount = results.Length - successCount;
 
-        _logger.LogInformation("Bildirim gönderimi tamamlandı: {RecipientCount} alıcı, {Success} başarılı, {Failed} başarısız",recipientList.Count, successCount, failureCount);
+        _logger.LogInformation("Bildirim gönderimi tamamlandı: {RecipientCount} alıcı, {Success} başarılı, {Failed} başarısız", recipientList.Count, successCount, failureCount);
 
         return new DispatchResult(successCount, failureCount);
     }
@@ -103,11 +103,13 @@ public sealed class NotificationDispatcher : INotificationDispatcher
         try
         {
             await sender.SendAsync(recipient, subject, body, cancellationToken);
+            _metrics.RecordDispatched(sender.Channel, recipient.Name);
             return true;
         }
         catch (NotificationSendException ex)
         {
             _logger.LogError(ex,"Bildirim gönderim hatası: {Channel} → {Recipient}",ex.Channel, ex.RecipientName);
+            _metrics.RecordFailed(ex.Channel, ex.RecipientName, errorType: ex.GetType().Name);
             return false;
         }
         catch (OperationCanceledException)
@@ -117,6 +119,7 @@ public sealed class NotificationDispatcher : INotificationDispatcher
         catch (Exception ex)
         {
             _logger.LogError(ex, "Beklenmedik bildirim hatası: {Channel} → {Recipient}", sender.Channel, recipient.Name);
+            _metrics.RecordFailed(sender.Channel, recipient.Name, errorType: ex.GetType().Name);
             return false;
         }
     }

@@ -1,13 +1,13 @@
 ﻿using EpiasPriceNotifier.Application.Abstractions;
 using EpiasPriceNotifier.Infrastructure.Epias;
 using EpiasPriceNotifier.Infrastructure.Notifications;
+using EpiasPriceNotifier.Infrastructure.Observability;
+using EpiasPriceNotifier.Infrastructure.Persistence;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using Telegram.Bot;
-using EpiasPriceNotifier.Infrastructure.Persistence;
-using Microsoft.EntityFrameworkCore;
-
 namespace EpiasPriceNotifier.Infrastructure;
 
 /// <summary>
@@ -23,17 +23,19 @@ namespace EpiasPriceNotifier.Infrastructure;
 /// </summary>
 public static class DependencyInjection
 {
-    public static IServiceCollection AddInfrastructure(
-        this IServiceCollection services,
-        IConfiguration configuration)
+    public static IServiceCollection AddInfrastructure(this IServiceCollection services,IConfiguration configuration)
     {
+        // ─── Observability metrics ──────────────────────────────────────
+        // Singleton — Meter ve Instrument'lar thread-safe, uzun ömürlü.
+        // OpenTelemetry SDK Program.cs'te AddMeter("EpiasPriceNotifier.*")
+        // ile bu meter'ı otomatik export'a dahil ediyor.
+        services.AddSingleton<EpiasMetrics>();
+
         // ──────── EPİAŞ entegrasyonu ────────────────────────────────────
 
         // EpiasOptions binding
         services
-            .AddOptions<EpiasOptions>()
-            .Bind(configuration.GetSection(EpiasOptions.SectionName))
-            .ValidateOnStart();
+            .AddOptions<EpiasOptions>().Bind(configuration.GetSection(EpiasOptions.SectionName)).ValidateOnStart();
 
         // Memory cache (TGT cache için lazım)
         services.AddMemoryCache();
@@ -55,10 +57,7 @@ public static class DependencyInjection
         // ──────── Bildirim altyapısı ───────────────────────────────────
 
         // NotificationOptions binding
-        services
-            .AddOptions<NotificationOptions>()
-            .Bind(configuration.GetSection(NotificationOptions.SectionName))
-            .ValidateOnStart();
+        services.AddOptions<NotificationOptions>().Bind(configuration.GetSection(NotificationOptions.SectionName)).ValidateOnStart();
 
         // ★ Telegram Bot Client
         // Bot token configuration'dan çekilip ITelegramBotClient'a sabit
@@ -85,8 +84,7 @@ public static class DependencyInjection
         // INotificationSender interface'iyle de ayrıca register ediyoruz çünkü
         // AddHttpClient default'ta concrete tipi register eder, interface'i değil.
         services.AddHttpClient<NtfyNotificationSender>();
-        services.AddTransient<INotificationSender>(sp =>
-            sp.GetRequiredService<NtfyNotificationSender>());
+        services.AddTransient<INotificationSender>(sp =>sp.GetRequiredService<NtfyNotificationSender>());
 
         // ★ Dispatcher — tüm sender'ları IEnumerable olarak otomatik toplar.
         // Singleton çünkü stateless ve sender lookup'u constructor'da bir kez yapılıyor.
@@ -95,16 +93,13 @@ public static class DependencyInjection
         // ──────── Persistence (EF Core + SQLite) ────────────────────────
         // ConnectionString config'ten alınıyor; default value Worker'ın yanında
         // app.db dosyası. SQLite dosya yoksa EF migration ile yaratacak.
-        var connectionString = configuration.GetConnectionString("Default")
-            ?? "Data Source=epias-price-notifier.db";
+        var connectionString = configuration.GetConnectionString("Default") ?? "Data Source=epias-price-notifier.db";
 
-        services.AddDbContext<AppDbContext>(options =>
-            options.UseSqlite(connectionString));
+        services.AddDbContext<AppDbContext>(options => options.UseSqlite(connectionString));
 
         // Repository — Application interface'i ile bind ediyoruz.
         // Handler INotificationLogRepository inject ediyor, somut tipi bilmiyor.
-        services.AddScoped<EpiasPriceNotifier.Application.Abstractions.INotificationLogRepository,
-                            Persistence.NotificationLogRepository>();
+        services.AddScoped<EpiasPriceNotifier.Application.Abstractions.INotificationLogRepository,Persistence.NotificationLogRepository>();
 
 
         // Domain servisleri — stateless, Singleton güvenli

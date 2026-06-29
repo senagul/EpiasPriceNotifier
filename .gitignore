@@ -5,7 +5,6 @@
 
 # dotenv files
 .env
-
 # User-specific files
 *.rsuser
 *.suo
@@ -485,3 +484,6 @@ $RECYCLE.BIN/
 *.db
 *.db-shm
 *.db-wal
+# Docker
+.env
+!.env.example

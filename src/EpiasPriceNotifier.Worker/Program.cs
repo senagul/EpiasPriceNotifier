@@ -94,6 +94,11 @@ builder.Host.UseSerilog((context, services, config) => config
     }));
 
 
+// Health checks — liveness (process responsive) ve readiness (dependencies ready) ayrı endpoint'lerde.
+// AddSqlite SQLite connection açıp kapatıyor, gerçek bağlantı problemi varsa Unhealthy döner.
+builder.Services.AddHealthChecks()
+    .AddSqlite(connectionString: builder.Configuration.GetConnectionString("Default") ?? "Data Source=epias-price-notifier.db", name: "sqlite", tags: new[] { "ready" });
+
 // ─── OpenTelemetry: Tracing + Metrics ──────────────────────────────────────
 // Logs zaten Serilog -> OpenTelemetry sink üzerinden gidiyor.
 // Burada distributed tracing ve metrics export ediyoruz aynı endpoint'e.
@@ -146,13 +151,30 @@ using (var scope = app.Services.CreateScope())
 
 app.UseExceptionHandler();
 
-// Basit health endpoint
-app.MapGet("/health", () => Results.Ok(new
+// Health endpoints — Docker/Kubernetes probes.
+// Liveness: sadece process responsive mi. Hiç dependency check etmez.
+// Readiness: "ready" tag'li tüm check'leri çalıştırır (şu an SQLite).
+app.MapHealthChecks("/health", new Microsoft.AspNetCore.Diagnostics.HealthChecks.HealthCheckOptions
 {
-    status = "healthy",
-    service = "EpiasPriceNotifier",
-    timestamp = DateTime.UtcNow
-}));
+    Predicate = _ => false // hiç check çalıştırma, sadece "endpoint var mı" sorusu
+});
+
+app.MapHealthChecks("/health/ready", new Microsoft.AspNetCore.Diagnostics.HealthChecks.HealthCheckOptions
+{
+    Predicate = check => check.Tags.Contains("ready"), // "ready" tag'li tüm check'leri çalıştır
+    ResponseWriter = async (context, report) =>
+    {
+        context.Response.ContentType = "application/json";
+        var response = new
+        {
+            status = report.Status.ToString(),
+            checks = report.Entries.Select(e => new { name = e.Key, status = e.Value.Status.ToString(), description = e.Value.Description, duration = e.Value.Duration.TotalMilliseconds }),
+            totalDuration = report.TotalDuration.TotalMilliseconds
+        };
+        await context.Response.WriteAsync(System.Text.Json.JsonSerializer.Serialize(response));
+    }
+});
+
 
 // Exception handler test endpoint'leri (önceki PR'dan)
 app.MapGet("/test/error/notfound", () =>

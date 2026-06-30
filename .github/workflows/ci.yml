@@ -35,7 +35,7 @@ jobs:
         run: dotnet build --configuration Release --no-restore
 
       - name: Test
-        run: dotnet test --configuration Release --no-build --verbosity normal --logger "console;verbosity=detailed"
+        run: dotnet test --configuration Release --verbosity normal --logger "console;verbosity=detailed"
 
   docker-build:
     name: Docker Build

@@ -34,8 +34,14 @@ jobs:
       - name: Build
         run: dotnet build --configuration Release --no-restore
 
-      - name: Test
-        run: dotnet test --configuration Release --verbosity normal --logger "console;verbosity=detailed"
+      - name: Test - Domain
+        run: dotnet test tests/EpiasPriceNotifier.Domain.UnitTests/EpiasPriceNotifier.Domain.UnitTests.csproj --configuration Release --verbosity normal
+
+      - name: Test - Application
+        run: dotnet test tests/EpiasPriceNotifier.Application.UnitTests/EpiasPriceNotifier.Application.UnitTests.csproj --configuration Release --verbosity normal
+
+      - name: Test - Integration
+        run: dotnet test tests/EpiasPriceNotifier.IntegrationTests/EpiasPriceNotifier.IntegrationTests.csproj --configuration Release --verbosity normal
 
   docker-build:
     name: Docker Build

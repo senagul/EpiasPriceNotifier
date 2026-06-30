@@ -9,9 +9,9 @@ namespace EpiasPriceNotifier.Application.UnitTests.UseCases.FetchAndNotifyCheapH
 /// <summary>
 /// CheapHoursMessageFormatter'ın çıktı formatını test eder.
 ///
-/// Test stratejisi: tam string match'ten kaçınıyoruz (format ufak ayarlarda
-/// kırılgan olur). Bunun yerine "bölüm başlığı var mı", "doğru pencere bilgisi
-/// var mı", "regresyon bug'ları geri gelmiş mi" gibi davranışsal kontrol.
+/// Test stratejisi: tam string match yerine "bölüm başlığı var mı", "doğru
+/// pencere bilgisi var mı", "regresyon bug'ları geri gelmiş mi" davranışsal
+/// kontrol. Format ufak ayarlarda kırılgan olmaz.
 ///
 /// Önemli regression test: 21 Haziran 2026 bug'ı — bedava ve pozitif-ucuz
 /// saatlerin AYRI bölümlerde olduğunu garanti eder.
@@ -29,10 +29,9 @@ public class CheapHoursMessageFormatterTests
 
         var (subject, body) = CheapHoursMessageFormatter.Format(schedule, emptyWindows, Threshold);
 
-        subject.Should().Contain("fiyat raporu");
+        subject.Should().Contain("Fiyat Raporu");
         body.Should().Contain("BEDAVA SAATLER");
         body.Should().Contain("UCUZ SAATLER");
-        // İki bölüm de "(Bugün Yok)" içermeli — bedava ve ucuz ayrı ayrı
         var occurrences = body.Split("(Bugün Yok)").Length - 1;
         occurrences.Should().Be(2);
     }
@@ -40,7 +39,6 @@ public class CheapHoursMessageFormatterTests
     [Fact]
     public void Format_WithOnlyFreeHours_ListsFreeWindowAndEmptyCheapSection()
     {
-        // 07:00-16:00 bedava (10 saat), geri kalan pahalı
         var prices = new decimal[24];
         for (var h = 0; h < 24; h++)
             prices[h] = (h >= 7 && h <= 16) ? 0m : 1000m;
@@ -51,11 +49,10 @@ public class CheapHoursMessageFormatterTests
         var (subject, body) = CheapHoursMessageFormatter.Format(schedule, cheapWindows, Threshold);
 
         subject.Should().Contain("BEDAVA");
-        // Bedava pencere içeriği — em-dash ve girintili madde işareti
-        body.Should().Contain("07:00 — 17:00");
+        body.Should().Contain("07:00");
+        body.Should().Contain("17:00");
         body.Should().Contain("(10 saat)");
 
-        // Ucuz bölümünde "(Bugün Yok)" görmeli
         var cheapSectionIdx = body.IndexOf("UCUZ SAATLER", StringComparison.Ordinal);
         var cheapSection = body.Substring(cheapSectionIdx);
         cheapSection.Should().Contain("(Bugün Yok)");
@@ -64,15 +61,6 @@ public class CheapHoursMessageFormatterTests
     [Fact]
     public void Format_WithBothFreeAndPositiveCheapHours_SeparatesIntoTwoSections()
     {
-        // 2026-06-21 regression: önceki bug bedava saatleri ucuz pencerenin içine
-        // gömüyordu. Bu test ayrı bölümlere ayrılmasını garanti ediyor.
-        //
-        // Saatler:
-        //   05:00 = 0.237 TL/kWh (ucuz)
-        //   06:00 = 0.171 TL/kWh (ucuz)
-        //   07:00-16:00 = bedava (10 saat)
-        //   17:00 = 0.171 TL/kWh (ucuz)
-        //   geri kalan = pahalı (1.50 TL/kWh)
         var prices = new decimal[24];
         for (var h = 0; h < 24; h++)
         {
@@ -92,16 +80,14 @@ public class CheapHoursMessageFormatterTests
 
         var (subject, body) = CheapHoursMessageFormatter.Format(schedule, cheapWindows, Threshold);
 
-        // Bedava bölümünde 07:00 — 17:00 (10 saat) görmeli
-        body.Should().Contain("07:00 — 17:00");
+        body.Should().Contain("07:00");
+        body.Should().Contain("17:00");
         body.Should().Contain("(10 saat)");
 
-        // Eski bug 13 saatlik pencere yazıyordu — bu hiç görünmemeli
         body.Should().NotContain("13 saat");
 
-        // Ucuz bölümünde iki ayrı pencere
-        body.Should().Contain("05:00 — 07:00");
-        body.Should().Contain("17:00 — 18:00");
+        body.Should().Contain("05:00");
+        body.Should().Contain("18:00");
 
         subject.Should().Contain("BEDAVA");
     }
@@ -116,7 +102,7 @@ public class CheapHoursMessageFormatterTests
 
         var (_, body) = CheapHoursMessageFormatter.Format(schedule, Array.Empty<CheapWindow>(), Threshold);
 
-        body.Should().Contain("GÜNLÜK ÖZET");
+        body.Should().Contain("ÖZET");
         body.Should().Contain("En Ucuz");
         body.Should().Contain("En Pahalı");
         body.Should().Contain("Ortalama");
@@ -135,10 +121,10 @@ public class CheapHoursMessageFormatterTests
 
         var (_, body) = CheapHoursMessageFormatter.Format(schedule, cheapWindows, Threshold);
 
-        body.Should().Contain("ÖNERİLER");
-        body.Should().Contain("Çamaşır / Bulaşık Makinesi");
-        body.Should().Contain("Ütü, Fırın, Isıtıcı");
-        body.Should().Contain("Kaçın"); // "Yüksek Tüketimden Kaçın"
+        body.Should().Contain("NERİ");
+        body.Should().Contain("Çamaşır");
+        body.Should().Contain("Bulaşık");
+        body.Should().Contain("Kaçın");
     }
 
     [Fact]

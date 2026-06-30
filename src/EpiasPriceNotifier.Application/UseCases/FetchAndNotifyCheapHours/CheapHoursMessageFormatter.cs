@@ -38,12 +38,12 @@ internal static class CheapHoursMessageFormatter
         var hasFree = cheapWindows.Any(w => w.MinPriceTryPerKwh == 0m);
 
         if (hasFree)
-            return $"BEDAVA elektrik saatleri var ({schedule.Date:dd MMM})";
+            return $"BEDAVA Elektrik Saatleri Var ({schedule.Date.ToString("dd MMM", TrCulture)})";
 
         if (cheapWindows.Count > 0)
-            return $"Ucuz elektrik saatleri ({schedule.Date:dd MMM})";
+            return $"Ucuz Elektrik Saatleri ({schedule.Date.ToString("dd MMM", TrCulture)})";
 
-        return $"Elektrik fiyat raporu ({schedule.Date:dd MMM})";
+        return $"Elektrik Fiyat Raporu ({schedule.Date.ToString("dd MMM", TrCulture)})";
     }
 
     private static string BuildBody(DailyPriceSchedule schedule, IReadOnlyList<CheapWindow> cheapWindows, PriceThreshold threshold)

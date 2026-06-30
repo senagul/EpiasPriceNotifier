@@ -24,7 +24,11 @@ public sealed class DailyPriceSchedule
                 $"Bir günde tam {ExpectedHourCount} saat olmalı, gelen: {orderedHours.Count}",
                 nameof(hours));
 
-        var allSameDay = orderedHours.All(h => DateOnly.FromDateTime(h.Hour.LocalDateTime) == date);
+        // h.Hour bir DateTimeOffset (+03:00 Türkiye offset'li). LocalDateTime
+        // kullanmak makinenin local TZ'sine çeviriyordu; CI Linux runner UTC'de
+        // olduğu için tarih bir gün önceye kayıyor ve validation patlıyordu.
+        // .DateTime offset-bağımsız ham değeri verir, TZ'den etkilenmez.
+        var allSameDay = orderedHours.All(h => DateOnly.FromDateTime(h.Hour.DateTime) == date);
         if (!allSameDay)
             throw new ArgumentException(
                 $"Tüm saatler {date:yyyy-MM-dd} tarihine ait olmalı",
